@@ -96,8 +96,7 @@ def simulate_playoffs(teams, elo, sims=300):
 
         while len(bracket) > 1:
             next_round = []
-print("Bracket size:", len(bracket))
-print("Bracket:", bracket)
+            
             for i in range(0, len(bracket), 2):
                 a, b = bracket[i], bracket[i + 1]
 
