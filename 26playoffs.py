@@ -77,26 +77,23 @@ def market_prob(team_a, team_b):
 # -----------------------------
 def build_model(teams, games):
 
-    elo = init_elo(teams)
+    elo = {t: 1500 for t in teams}
 
     for _, row in games.iterrows():
         team = row["TEAM_ABBREVIATION"]
         matchup = row["MATCHUP"]
         result = row["WL"]
 
-        if team not in teams:
+        if team not in elo:
             continue
-
-        injury = np.random.rand() * 0.1  # simulated injury factor
-        strength = player_adjustment(elo[team], injury)
 
         for opp in teams:
             if opp in matchup and opp != team:
 
-                home_adv = 2 if "vs." in matchup else -2
-                clutch = np.random.rand() > 0.8
+                if opp not in elo:
+                    elo[opp] = 1500
 
-                elo_update(elo, team, opp, result, home_adv, clutch)
+                elo_update(elo, team, opp, result)
 
     return elo
 
