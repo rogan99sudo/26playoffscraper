@@ -108,26 +108,39 @@ def simulate_playoffs(teams, elo, sims=300):
     results = {t: 0 for t in teams}
 
     for _ in range(sims):
-        bracket = teams.copy()
+
+        bracket = [t for t in teams if t is not None]
+
+        if len(bracket) < 2:
+            continue
+
         np.random.shuffle(bracket)
+
+        # FORCE EVEN NUMBER OF TEAMS
+        if len(bracket) % 2 == 1:
+            bracket = bracket[:-1]
 
         while len(bracket) > 1:
             next_round = []
 
             for i in range(0, len(bracket), 2):
-                a, b = bracket[i], bracket[i+1]
+                a = bracket[i]
+                b = bracket[i + 1]
 
-                p = live_win_prob(elo[a], elo[b], momentum=np.random.uniform(-5, 5))
+                p = 1 / (1 + 10 ** ((elo[b] - elo[a]) / 400))
 
                 winner = a if np.random.rand() < p else b
                 next_round.append(winner)
 
             bracket = next_round
 
-        results[bracket[0]] += 1
+            if len(bracket) == 1:
+                break
+
+        if len(bracket) == 1:
+            results[bracket[0]] += 1
 
     return results
-
 # -----------------------------
 # RUN ENGINE
 # -----------------------------
