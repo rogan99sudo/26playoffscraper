@@ -2,35 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-from nba_api.stats.endpoints import leaguegamefinder, leaguestandings
+from nba_api.stats.endpoints import leaguegamefinder
 
 st.set_page_config(page_title="NBA Live Intelligence Engine", layout="wide")
-
-st.title("🏀 NBA Live Intelligence Engine (Version 6)")
-
-# -----------------------------
-# PLAYOFF TEAMS
-# -----------------------------
-from nba_api.stats.static import teams as nba_teams
-
-@st.cache_data
-def get_teams():
-    standings = leaguestandings.LeagueStandings().get_data_frames()[0]
-
-    # get official NBA team mapping
-    nba_list = nba_teams.get_teams()
-    name_to_abbrev = {t["full_name"]: t["abbreviation"] for t in nba_list}
-
-    # split by conference (your data already has correct column)
-    east = standings[standings["Conference"] == "East"].head(8)
-    west = standings[standings["Conference"] == "West"].head(8)
-
-    east_teams = [name_to_abbrev.get(name, None) for name in east["TeamName"]]
-    west_teams = [name_to_abbrev.get(name, None) for name in west["TeamName"]]
-
-    teams = [t for t in east_teams + west_teams if t is not None]
-
-    return teams
+st.title("🏀 NBA Live Intelligence Engine (Fixed Version)")
 
 # -----------------------------
 # GAME DATA
@@ -41,43 +16,37 @@ def get_games():
     return g[g["SEASON_ID"] == "22025"]
 
 # -----------------------------
-# PLAYER IMPACT MODEL (simplified RAPTOR-style)
+# TEAM UNIVERSE (FIXED)
 # -----------------------------
-def player_adjustment(team_strength, injury_factor):
-    return team_strength * (1 - injury_factor)
+def get_teams_from_games(games):
+    return sorted(games["TEAM_ABBREVIATION"].dropna().unique().tolist())
 
 # -----------------------------
-# ADVANCED ELO
+# ELO SYSTEM
 # -----------------------------
 def init_elo(teams):
     return {t: 1500 for t in teams}
 
-def elo_update(elo, a, b, result, home_adv=0, clutch=1):
-    k = 18 * clutch
+def elo_update(elo, a, b, result, k=18):
+    expected_a = 1 / (1 + 10 ** ((elo[b] - elo[a]) / 400))
+    score_a = 1 if result == "W" else 0
 
-    expected = 1 / (1 + 10 ** ((elo[b] - elo[a] - home_adv) / 400))
-    score = 1 if result == "W" else 0
-
-    elo[a] += k * (score - expected)
-
-# -----------------------------
-# LIVE PROBABILITY ENGINE
-# -----------------------------
-def live_win_prob(elo_a, elo_b, momentum=0):
-    return 1 / (1 + 10 ** ((elo_b - elo_a - momentum) / 400))
+    elo[a] += k * (score_a - expected_a)
+    elo[b] -= k * (score_a - expected_a)
 
 # -----------------------------
-# MARKET VALUE COMPARISON (SIMULATED)
+# BUILD MODEL (FIXED LOGIC)
 # -----------------------------
-def market_prob(team_a, team_b):
-    return np.random.uniform(0.35, 0.65)
+def parse_matchup(matchup):
+    # "LAL vs BOS" or "LAL @ BOS"
+    if " vs " in matchup:
+        return matchup.split(" vs ")
+    if " @ " in matchup:
+        return matchup.split(" @ ")
+    return None, None
 
-# -----------------------------
-# MODEL BUILD
-# -----------------------------
 def build_model(teams, games):
-
-    elo = {t: 1500 for t in teams}
+    elo = init_elo(teams)
 
     for _, row in games.iterrows():
         team = row["TEAM_ABBREVIATION"]
@@ -87,33 +56,41 @@ def build_model(teams, games):
         if team not in elo:
             continue
 
-        for opp in teams:
-            if opp in matchup and opp != team:
+        t1, t2 = parse_matchup(matchup)
+        if not t1 or not t2:
+            continue
 
-                if opp not in elo:
-                    elo[opp] = 1500
+        opp = t2 if team == t1 else t1
 
-                elo_update(elo, team, opp, result)
+        if opp not in elo:
+            continue
+
+        elo_update(elo, team, opp, result)
 
     return elo
 
 # -----------------------------
-# SIMULATE PLAYOFF BRACKET
+# WIN PROBABILITY
+# -----------------------------
+def live_win_prob(elo_a, elo_b, momentum=0):
+    return 1 / (1 + 10 ** ((elo_b - elo_a - momentum) / 400))
+
+# -----------------------------
+# MARKET MODEL (SIMULATED)
+# -----------------------------
+def market_prob(team_a, team_b):
+    return np.random.uniform(0.35, 0.65)
+
+# -----------------------------
+# PLAYOFF SIMULATION
 # -----------------------------
 def simulate_playoffs(teams, elo, sims=300):
-
     results = {t: 0 for t in teams}
 
     for _ in range(sims):
-
-        bracket = [t for t in teams if t is not None]
-
-        if len(bracket) < 2:
-            continue
-
+        bracket = teams.copy()
         np.random.shuffle(bracket)
 
-        # FORCE EVEN NUMBER OF TEAMS
         if len(bracket) % 2 == 1:
             bracket = bracket[:-1]
 
@@ -121,80 +98,74 @@ def simulate_playoffs(teams, elo, sims=300):
             next_round = []
 
             for i in range(0, len(bracket), 2):
-                a = bracket[i]
-                b = bracket[i + 1]
+                a, b = bracket[i], bracket[i + 1]
 
-                p = 1 / (1 + 10 ** ((elo[b] - elo[a]) / 400))
-
+                p = live_win_prob(elo[a], elo[b])
                 winner = a if np.random.rand() < p else b
                 next_round.append(winner)
 
             bracket = next_round
 
-            if len(bracket) == 1:
-                break
-
-        if len(bracket) == 1:
-            results[bracket[0]] += 1
+        results[bracket[0]] += 1
 
     return results
+
 # -----------------------------
-# RUN ENGINE
+# RUN APP
 # -----------------------------
 if st.button("Run Full Live Intelligence Model"):
 
-    teams = get_teams()
     games = get_games()
+    teams = get_teams_from_games(games)
 
     elo = build_model(teams, games)
 
-    st.subheader("📊 Adjusted Team Strength (Elo + Injuries + Clutch)")
+    # -----------------------------
+    # ELO TABLE
+    # -----------------------------
+    st.subheader("📊 Team Strength (Elo Ratings)")
 
     df = pd.DataFrame({
         "Team": list(elo.keys()),
-        "Strength": list(elo.values())
-    }).sort_values("Strength", ascending=False)
+        "Elo": list(elo.values())
+    }).sort_values("Elo", ascending=False)
 
     st.dataframe(df)
 
-    fig = px.bar(df, x="Team", y="Strength")
-    st.plotly_chart(fig)
+    st.plotly_chart(px.bar(df, x="Team", y="Elo"))
 
     # -----------------------------
-    # CHAMPIONSHIP SIM
+    # PLAYOFF SIM
     # -----------------------------
-    st.subheader("🏆 Championship Probability Engine")
+    st.subheader("🏆 Championship Simulation")
 
     results = simulate_playoffs(teams, elo)
 
     champ_df = pd.DataFrame({
         "Team": list(results.keys()),
-        "Title %": [v / 300 for v in results.values()]
+        "Title %": np.array(list(results.values())) / 300
     }).sort_values("Title %", ascending=False)
 
     st.dataframe(champ_df)
-
-    fig2 = px.bar(champ_df, x="Team", y="Title %")
-    st.plotly_chart(fig2)
+    st.plotly_chart(px.bar(champ_df, x="Team", y="Title %"))
 
     # -----------------------------
-    # LIVE MATCHUP SIM
+    # MATCHUP SIM
     # -----------------------------
     st.subheader("📡 Live Matchup Simulator")
 
     a = st.selectbox("Team A", teams)
     b = st.selectbox("Team B", teams)
-
     momentum = st.slider("Momentum Swing", -10, 10, 0)
 
     prob = live_win_prob(elo[a], elo[b], momentum)
 
     st.write(f"{a} win probability: {prob:.2%}")
-    st.write(f"{b} win probability: {(1-prob):.2%}")
+    st.write(f"{b} win probability: {(1 - prob):.2%}")
 
     market = market_prob(a, b)
 
-    st.subheader("📊 Market vs Model")
+    st.subheader("📊 Model vs Market")
     st.write(f"Model: {a} {prob:.2%}")
     st.write(f"Market: {a} {market:.2%}")
-    st.write(f"Edge: {prob - market:.2%}")
+    st.write(f"Edge: {(prob - market):.2%}")
