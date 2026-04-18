@@ -11,15 +11,26 @@ st.title("🏀 NBA Live Intelligence Engine (Version 6)")
 # -----------------------------
 # PLAYOFF TEAMS
 # -----------------------------
+from nba_api.stats.static import teams as nba_teams
+
 @st.cache_data
 def get_teams():
     standings = leaguestandings.LeagueStandings().get_data_frames()[0]
 
-    st.write(standings.columns)
-    st.write(standings.head())
+    # get official NBA team mapping
+    nba_list = nba_teams.get_teams()
+    name_to_abbrev = {t["full_name"]: t["abbreviation"] for t in nba_list}
 
-    # stop function early so you can see output
-    return []
+    # split by conference (your data already has correct column)
+    east = standings[standings["Conference"] == "East"].head(8)
+    west = standings[standings["Conference"] == "West"].head(8)
+
+    east_teams = [name_to_abbrev.get(name, None) for name in east["TeamName"]]
+    west_teams = [name_to_abbrev.get(name, None) for name in west["TeamName"]]
+
+    teams = [t for t in east_teams + west_teams if t is not None]
+
+    return teams
 
 # -----------------------------
 # GAME DATA
