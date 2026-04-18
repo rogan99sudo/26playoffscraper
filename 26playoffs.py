@@ -14,8 +14,8 @@ st.title("🏀 NBA Live Intelligence Engine (Version 6)")
 @st.cache_data
 def get_teams():
     standings = leaguestandings.LeagueStandings().get_data_frames()[0]
-    east = standings[standings["CONFERENCE"] == "East"].head(8)
-    west = standings[standings["CONFERENCE"] == "West"].head(8)
+    east = standings[standings["Conference"] == "East"].head(8)
+    west = standings[standings["Conference"] == "West"].head(8)
     return list(east["TEAM_ABBREVIATION"]) + list(west["TEAM_ABBREVIATION"])
 
 # -----------------------------
