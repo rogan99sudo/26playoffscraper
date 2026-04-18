@@ -452,13 +452,14 @@ m5.metric("Avg Elo", f"{filtered_elo_df['Elo'].mean():.1f}")
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Power Board",
     "Playoff Board",
     "Live Matchup",
     "Team Profile",
     "Form Tracker",
-    "Watchlist"
+    "Watchlist",
+    "Model Guide"
 ])
 
 # =========================================================
@@ -806,3 +807,112 @@ st.caption(
 if auto_refresh:
     time.sleep(30)
     st.rerun()
+
+# =========================================================
+# TAB 7 — MODEL GUIDE
+# =========================================================
+with tab7:
+    st.subheader("🧠 How the Elo Model Works")
+
+    st.markdown("""
+    ### 📊 What is Elo?
+
+    Elo is a rating system that measures team strength based on game results.
+
+    - Every team starts at **1500**
+    - Teams gain points when they win
+    - Teams lose points when they lose
+    - Beating a strong team = bigger boost
+    - Losing to a weak team = bigger penalty
+    """)
+
+    st.markdown("---")
+
+    st.markdown("### ⚙️ Win Probability Formula")
+
+    st.write("We calculate win probability using this formula:")
+
+    st.latex(r"P(A) = \frac{1}{1 + 10^{(Elo_B - Elo_A)/400}}")
+
+    st.markdown("""
+    - If both teams are equal → **50%**
+    - If Team A is stronger → probability increases
+    - If Team A is weaker → probability decreases
+    """)
+
+    st.markdown("---")
+
+    st.markdown("### 🔄 Rating Update Formula")
+
+    st.latex(r"Elo_{new} = Elo_{old} + K \cdot (Actual - Expected)")
+
+    st.markdown("""
+    Where:
+    - **Expected** = predicted win probability
+    - **Actual** = 1 (win) or 0 (loss)
+    - **K-factor** controls how fast ratings change
+    """)
+
+    st.markdown("---")
+
+    st.markdown("### 🔥 Example")
+
+    st.write("Team A (1600 Elo) vs Team B (1500 Elo):")
+
+    st.latex(r"P(A) \approx 64\%")
+
+    st.markdown("""
+    If Team A wins:
+    - small Elo gain (expected result)
+
+    If Team A loses:
+    - big Elo drop (upset penalty)
+    """)
+
+    st.markdown("---")
+
+    st.markdown("### 🚀 How This App Enhances Elo")
+
+    st.markdown("""
+    We extend basic Elo with:
+
+    **1. Momentum Adjustment**
+    - Slider adds/subtracts Elo in real-time
+    - Simulates hot streaks or in-game swings
+
+    **2. Home Court Advantage**
+    - Adds a fixed Elo boost for home team
+    - Typically worth ~40–80 Elo
+
+    **3. Monte Carlo Simulation**
+    - Runs thousands of simulated playoffs
+    - Converts ratings into **title odds**
+
+    **4. Market Comparison**
+    - Compare model probability vs sportsbook
+    - Identify **edges and inefficiencies**
+    """)
+
+    st.markdown("---")
+
+    st.markdown("### 📈 Interpreting Elo Differences")
+
+    diff_df = pd.DataFrame({
+        "Elo Difference": [0, 50, 100, 200, 300],
+        "Win Probability": ["50%", "57%", "64%", "76%", "85%"]
+    })
+
+    st.dataframe(diff_df, use_container_width=True)
+
+    st.markdown("---")
+
+    st.markdown("### 🎯 What Makes This Useful")
+
+    st.markdown("""
+    - Objective team strength measurement  
+    - Reacts to every game played  
+    - Powers matchup predictions  
+    - Drives simulation-based betting insights  
+    """)
+
+    st.success("💡 Think of Elo as a live power rating that constantly updates based on performance.")
