@@ -91,18 +91,20 @@ def simulate_playoffs(teams, elo, sims=300):
         bracket = teams.copy()
         np.random.shuffle(bracket)
 
-        if len(bracket) % 2 == 1:
-            bracket = bracket[:-1]
-
         while len(bracket) > 1:
             next_round = []
-            
-            for i in range(0, len(bracket), 2):
+
+            # ensure safe pairing
+            for i in range(0, len(bracket) - 1, 2):
                 a, b = bracket[i], bracket[i + 1]
 
                 p = live_win_prob(elo[a], elo[b])
                 winner = a if np.random.rand() < p else b
                 next_round.append(winner)
+
+            # carry odd team forward if needed (optional but realistic)
+            if len(bracket) % 2 == 1:
+                next_round.append(bracket[-1])
 
             bracket = next_round
 
