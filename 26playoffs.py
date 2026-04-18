@@ -5,14 +5,63 @@ import plotly.express as px
 import plotly.graph_objects as go
 from nba_api.stats.endpoints import leaguegamefinder
 
+# =========================================================
+# PAGE SETUP
+# =========================================================
 st.set_page_config(
     page_title="NBA Live Intelligence Engine",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# =========================================================
+# CUSTOM STYLING
+# =========================================================
+st.markdown("""
+<style>
+html, body, [class*="css"] {
+    font-family: "Inter", sans-serif;
+}
+.main {
+    background: linear-gradient(180deg, #0b1220 0%, #111827 100%);
+}
+.block-container {
+    padding-top: 1.2rem;
+    padding-bottom: 1rem;
+}
+h1, h2, h3 {
+    letter-spacing: -0.02em;
+}
+[data-testid="stMetric"] {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 14px 16px;
+    border-radius: 16px;
+}
+.dashboard-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 18px;
+    padding: 14px 18px;
+    margin-bottom: 12px;
+}
+.ticker {
+    padding: 12px 16px;
+    border-radius: 14px;
+    background: linear-gradient(90deg, rgba(59,130,246,0.18), rgba(168,85,247,0.16));
+    border: 1px solid rgba(255,255,255,0.08);
+    font-size: 0.95rem;
+    margin-bottom: 14px;
+}
+.small-note {
+    opacity: 0.75;
+    font-size: 0.85rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("🏀 NBA Live Intelligence Engine")
-st.caption("Elo ratings, title simulations, and live matchup intelligence")
+st.caption("Broadcast-style team ratings, title odds, live matchup intelligence, and trend tracking")
 
 # =========================================================
 # DATA
@@ -28,7 +77,26 @@ def get_teams_from_games(games):
     return sorted(games["TEAM_ABBREVIATION"].dropna().unique().tolist())
 
 # =========================================================
-# ELO
+# LIGHT CONFERENCE MAP
+# =========================================================
+EAST = {
+    "ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DET", "IND",
+    "MIA", "MIL", "NYK", "ORL", "PHI", "TOR", "WAS"
+}
+WEST = {
+    "DAL", "DEN", "GSW", "HOU", "LAC", "LAL", "MEM", "MIN",
+    "NOP", "OKC", "PHX", "POR", "SAC", "SAS", "UTA"
+}
+
+def get_conference(team):
+    if team in EAST:
+        return "East"
+    if team in WEST:
+        return "West"
+    return "Unknown"
+
+# =========================================================
+# ELO MODEL
 # =========================================================
 def init_elo(teams):
     return {team: 1500.0 for team in teams}
@@ -40,7 +108,6 @@ def elo_update_pair(elo, team_a, team_b, team_a_won, k=18):
     ea = expected_score(elo[team_a], elo[team_b])
     sa = 1.0 if team_a_won else 0.0
     delta = k * (sa - ea)
-
     elo[team_a] += delta
     elo[team_b] -= delta
 
@@ -66,8 +133,8 @@ def build_model(teams, games, k_factor=18):
 
         pre_a = elo[team_a]
         pre_b = elo[team_b]
-
         team_a_won = row_a["WL"] == "W"
+
         elo_update_pair(elo, team_a, team_b, team_a_won, k=k_factor)
 
         history.append({
@@ -82,14 +149,13 @@ def build_model(teams, games, k_factor=18):
             "POST_ELO_B": elo[team_b],
         })
 
-    history_df = pd.DataFrame(history)
-    return elo, history_df
+    return elo, pd.DataFrame(history)
 
 # =========================================================
-# MODEL HELPERS
+# HELPERS
 # =========================================================
-def live_win_prob(elo_a, elo_b, momentum=0, home_edge=0):
-    adjusted_a = elo_a + momentum * 10 + home_edge
+def live_win_prob(elo_a, elo_b, momentum=0, venue_adjustment=0):
+    adjusted_a = elo_a + momentum * 10 + venue_adjustment
     return 1 / (1 + 10 ** ((elo_b - adjusted_a) / 400))
 
 def stable_market_prob(team_a, team_b):
@@ -123,35 +189,40 @@ def simulate_playoffs(teams, elo, sims=1000):
 
     return results
 
+@st.cache_data(show_spinner=False)
+def cached_playoff_sim(teams_tuple, elo_items_tuple, sims):
+    teams = list(teams_tuple)
+    elo = dict(elo_items_tuple)
+    return simulate_playoffs(teams, elo, sims=sims)
+
 def team_form_from_history(history_df, team, last_n=10):
     if history_df.empty:
         return pd.DataFrame()
 
     rows = []
-
     for _, r in history_df.iterrows():
         if r["TEAM_A"] == team:
             rows.append({
                 "GAME_DATE": r["GAME_DATE"],
                 "TEAM": team,
+                "OPP": r["TEAM_B"],
+                "RESULT": "W" if r["TEAM_A_WON"] else "L",
                 "PRE_ELO": r["PRE_ELO_A"],
                 "POST_ELO": r["POST_ELO_A"],
-                "OPP": r["TEAM_B"],
-                "RESULT": "W" if r["TEAM_A_WON"] else "L"
+                "ELO_DELTA": r["POST_ELO_A"] - r["PRE_ELO_A"],
             })
         elif r["TEAM_B"] == team:
             rows.append({
                 "GAME_DATE": r["GAME_DATE"],
                 "TEAM": team,
+                "OPP": r["TEAM_A"],
+                "RESULT": "L" if r["TEAM_A_WON"] else "W",
                 "PRE_ELO": r["PRE_ELO_B"],
                 "POST_ELO": r["POST_ELO_B"],
-                "OPP": r["TEAM_A"],
-                "RESULT": "L" if r["TEAM_A_WON"] else "W"
+                "ELO_DELTA": r["POST_ELO_B"] - r["PRE_ELO_B"],
             })
 
     df = pd.DataFrame(rows).sort_values("GAME_DATE")
-    if df.empty:
-        return df
     return df.tail(last_n)
 
 def head_to_head_summary(games, team_a, team_b):
@@ -162,24 +233,13 @@ def head_to_head_summary(games, team_a, team_b):
     subset = games.loc[mask].copy()
 
     if subset.empty:
-        return {
-            "games": 0,
-            "a_wins": 0,
-            "b_wins": 0
-        }
+        return {"games": 0, "a_wins": 0, "b_wins": 0}
 
-    # Count each game once using team_a row if possible
-    team_a_rows = subset[subset["TEAM_ABBREVIATION"] == team_a]
-    team_a_rows = team_a_rows.drop_duplicates(subset=["GAME_ID"])
-
-    a_wins = (team_a_rows["WL"] == "W").sum()
+    team_a_rows = subset[subset["TEAM_ABBREVIATION"] == team_a].drop_duplicates(subset=["GAME_ID"])
     total = len(team_a_rows)
+    a_wins = int((team_a_rows["WL"] == "W").sum())
 
-    return {
-        "games": total,
-        "a_wins": int(a_wins),
-        "b_wins": int(total - a_wins)
-    }
+    return {"games": total, "a_wins": a_wins, "b_wins": total - a_wins}
 
 def win_prob_gauge(prob, team_a):
     fig = go.Figure(go.Indicator(
@@ -189,16 +249,36 @@ def win_prob_gauge(prob, team_a):
         title={"text": f"{team_a} Win Probability"},
         gauge={
             "axis": {"range": [0, 100]},
-            "bar": {"thickness": 0.3},
+            "bar": {"thickness": 0.28},
             "steps": [
-                {"range": [0, 35], "color": "#f8d7da"},
-                {"range": [35, 65], "color": "#fff3cd"},
-                {"range": [65, 100], "color": "#d1e7dd"},
+                {"range": [0, 35], "color": "rgba(239,68,68,0.35)"},
+                {"range": [35, 65], "color": "rgba(245,158,11,0.35)"},
+                {"range": [65, 100], "color": "rgba(34,197,94,0.35)"},
             ],
         }
     ))
-    fig.update_layout(height=320, margin=dict(l=20, r=20, t=60, b=20))
+    fig.update_layout(
+        height=300,
+        margin=dict(l=20, r=20, t=60, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white")
+    )
     return fig
+
+def make_rank_delta_table(form_map, elo_df):
+    rows = []
+    for _, r in elo_df.iterrows():
+        team = r["Team"]
+        form_df = form_map.get(team, pd.DataFrame())
+        recent_delta = float(form_df["ELO_DELTA"].sum()) if not form_df.empty else 0.0
+        rows.append({
+            "Team": team,
+            "Conference": get_conference(team),
+            "Elo": r["Elo"],
+            "Last Window Elo Change": recent_delta
+        })
+    out = pd.DataFrame(rows)
+    return out.sort_values(["Conference", "Elo"], ascending=[True, False]).reset_index(drop=True)
 
 # =========================================================
 # LOAD MODEL
@@ -210,233 +290,360 @@ with st.spinner("Loading season data and building model..."):
 # =========================================================
 # SIDEBAR
 # =========================================================
-st.sidebar.header("Controls")
+st.sidebar.header("Dashboard Controls")
 
 k_factor = st.sidebar.slider("Elo K-Factor", 8, 40, 18)
 sim_count = st.sidebar.slider("Playoff Simulations", 100, 5000, 1000, step=100)
-last_n_form = st.sidebar.slider("Form Window", 5, 20, 10)
+form_window = st.sidebar.slider("Form Window", 5, 20, 10)
 home_edge = st.sidebar.slider("Home Court Edge", 0, 120, 50, step=5)
+
+conference_filter = st.sidebar.selectbox(
+    "Conference Filter",
+    ["All", "East", "West"]
+)
+
+show_only_top = st.sidebar.slider("Show Top Teams", 5, 30, 15)
 
 elo, history_df = build_model(teams, games, k_factor=k_factor)
 
 elo_df = pd.DataFrame({
     "Team": list(elo.keys()),
     "Elo": list(elo.values())
-}).sort_values("Elo", ascending=False).reset_index(drop=True)
+})
+elo_df["Conference"] = elo_df["Team"].map(get_conference)
+elo_df = elo_df.sort_values("Elo", ascending=False).reset_index(drop=True)
+
+if conference_filter != "All":
+    filtered_elo_df = elo_df[elo_df["Conference"] == conference_filter].reset_index(drop=True)
+else:
+    filtered_elo_df = elo_df.copy()
+
+form_map = {
+    team: team_form_from_history(history_df, team, last_n=form_window)
+    for team in teams
+}
+
+trend_df = make_rank_delta_table(form_map, elo_df)
 
 # =========================================================
-# TOP SUMMARY
+# HEADLINE / TICKER
 # =========================================================
 top_team = elo_df.iloc[0]["Team"] if not elo_df.empty else "N/A"
-avg_elo = elo_df["Elo"].mean() if not elo_df.empty else 1500
-games_count = games["GAME_ID"].nunique()
+top_elo = elo_df.iloc[0]["Elo"] if not elo_df.empty else 0
+biggest_riser_row = trend_df.sort_values("Last Window Elo Change", ascending=False).iloc[0]
+biggest_faller_row = trend_df.sort_values("Last Window Elo Change", ascending=True).iloc[0]
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Teams", len(teams))
-c2.metric("Games Modeled", games_count)
-c3.metric("Top Elo Team", top_team)
-c4.metric("Average Elo", f"{avg_elo:.1f}")
+st.markdown(
+    f"""
+    <div class="ticker">
+        <b>Top Power Team:</b> {top_team} ({top_elo:.1f} Elo)
+        &nbsp;&nbsp;•&nbsp;&nbsp;
+        <b>Hottest Team:</b> {biggest_riser_row["Team"]} ({biggest_riser_row["Last Window Elo Change"]:+.1f} last window)
+        &nbsp;&nbsp;•&nbsp;&nbsp;
+        <b>Coldest Team:</b> {biggest_faller_row["Team"]} ({biggest_faller_row["Last Window Elo Change"]:+.1f} last window)
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# =========================================================
+# TOP METRICS
+# =========================================================
+col1, col2, col3, col4, col5 = st.columns(5)
+col1.metric("Teams", len(filtered_elo_df))
+col2.metric("Games Modeled", games["GAME_ID"].nunique())
+col3.metric("Top Team", top_team)
+col4.metric("Top Elo", f"{top_elo:.1f}")
+col5.metric("Avg Elo", f"{filtered_elo_df['Elo'].mean():.1f}")
 
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Power Ratings",
-    "Championship Odds",
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Power Board",
+    "Playoff Board",
     "Live Matchup",
-    "Team Form"
+    "Form Tracker",
+    "Watchlist"
 ])
 
 # =========================================================
-# TAB 1 — POWER RATINGS
+# TAB 1 — POWER BOARD
 # =========================================================
 with tab1:
-    st.subheader("📊 Power Ratings")
+    st.subheader("📊 Power Board")
 
-    col1, col2 = st.columns([1.1, 1])
+    left, right = st.columns([1.05, 1])
 
-    with col1:
-        st.dataframe(elo_df, use_container_width=True, height=650)
-
-    with col2:
-        fig = px.bar(
-            elo_df.head(15),
-            x="Team",
-            y="Elo",
-            title="Top 15 Teams by Elo"
+    with left:
+        st.dataframe(
+            filtered_elo_df[["Team", "Conference", "Elo"]],
+            use_container_width=True,
+            height=620
         )
-        fig.update_layout(height=650)
-        st.plotly_chart(fig, use_container_width=True)
+
+    with right:
+        chart_df = filtered_elo_df.head(show_only_top).copy()
+        fig = px.bar(
+            chart_df.sort_values("Elo", ascending=True),
+            x="Elo",
+            y="Team",
+            color="Conference",
+            orientation="h",
+            title=f"Top {min(show_only_top, len(chart_df))} Power Ratings"
+        )
+        fig.update_layout(
+            height=620,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            legend_title_text=""
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 # =========================================================
-# TAB 2 — CHAMPIONSHIP ODDS
+# TAB 2 — PLAYOFF BOARD
 # =========================================================
 with tab2:
-    st.subheader("🏆 Championship Simulation")
+    st.subheader("🏆 Playoff Board")
 
-    if st.button("Run Title Simulation", use_container_width=True):
-        results = simulate_playoffs(teams, elo, sims=sim_count)
+    results = cached_playoff_sim(tuple(teams), tuple(elo.items()), sim_count)
 
-        champ_df = pd.DataFrame({
-            "Team": list(results.keys()),
-            "Titles": list(results.values())
-        })
-        champ_df["Title %"] = champ_df["Titles"] / sim_count
-        champ_df = champ_df.sort_values("Title %", ascending=False).reset_index(drop=True)
+    champ_df = pd.DataFrame({
+        "Team": list(results.keys()),
+        "Titles": list(results.values())
+    })
+    champ_df["Title %"] = champ_df["Titles"] / sim_count
+    champ_df["Conference"] = champ_df["Team"].map(get_conference)
+    champ_df = champ_df.sort_values("Title %", ascending=False).reset_index(drop=True)
 
-        left, right = st.columns([1, 1])
+    if conference_filter != "All":
+        champ_df = champ_df[champ_df["Conference"] == conference_filter].reset_index(drop=True)
 
-        with left:
-            st.dataframe(
-                champ_df[["Team", "Titles", "Title %"]],
-                use_container_width=True,
-                height=650
-            )
+    left, right = st.columns([1, 1])
 
-        with right:
-            fig = px.bar(
-                champ_df.head(15),
-                x="Team",
-                y="Title %",
-                title="Top 15 Championship Odds"
-            )
-            fig.update_layout(height=650)
-            st.plotly_chart(fig, use_container_width=True)
+    with left:
+        st.markdown("**Championship Odds**")
+        st.dataframe(
+            champ_df[["Team", "Conference", "Titles", "Title %"]],
+            use_container_width=True,
+            height=540
+        )
+
+    with right:
+        fig = px.bar(
+            champ_df.head(show_only_top).sort_values("Title %", ascending=True),
+            x="Title %",
+            y="Team",
+            color="Conference",
+            orientation="h",
+            title="Best Title Chances"
+        )
+        fig.update_layout(
+            height=540,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis_tickformat=".0%"
+        )
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    st.markdown("### Playoff Field Snapshot")
+    east_board = champ_df[champ_df["Conference"] == "East"].head(8)[["Team", "Title %"]].reset_index(drop=True)
+    west_board = champ_df[champ_df["Conference"] == "West"].head(8)[["Team", "Title %"]].reset_index(drop=True)
+
+    b1, b2 = st.columns(2)
+    with b1:
+        st.markdown("**East Top 8**")
+        east_view = east_board.copy()
+        east_view.index = np.arange(1, len(east_view) + 1)
+        st.dataframe(east_view, use_container_width=True, height=320)
+
+    with b2:
+        st.markdown("**West Top 8**")
+        west_view = west_board.copy()
+        west_view.index = np.arange(1, len(west_view) + 1)
+        st.dataframe(west_view, use_container_width=True, height=320)
 
 # =========================================================
 # TAB 3 — LIVE MATCHUP
 # =========================================================
 with tab3:
-    st.subheader("📡 Live Matchup Simulator")
+    st.subheader("📡 Live Matchup")
+
+    available_teams = filtered_elo_df["Team"].tolist() if not filtered_elo_df.empty else teams
 
     if "team_a" not in st.session_state:
-        st.session_state.team_a = teams[0]
+        st.session_state.team_a = available_teams[0]
     if "team_b" not in st.session_state:
-        st.session_state.team_b = teams[1] if len(teams) > 1 else teams[0]
+        st.session_state.team_b = available_teams[1] if len(available_teams) > 1 else available_teams[0]
     if "momentum" not in st.session_state:
         st.session_state.momentum = 0
-    if "is_home_a" not in st.session_state:
-        st.session_state.is_home_a = True
+    if "venue" not in st.session_state:
+        st.session_state.venue = "Team A Home"
 
-    with st.form("matchup_controls"):
-        mc1, mc2, mc3, mc4 = st.columns(4)
+    with st.form("matchup_form"):
+        m1, m2, m3, m4 = st.columns(4)
 
-        with mc1:
-            team_a = st.selectbox("Team A", teams, index=teams.index(st.session_state.team_a))
-        with mc2:
-            team_b = st.selectbox("Team B", teams, index=teams.index(st.session_state.team_b))
-        with mc3:
+        with m1:
+            team_a = st.selectbox(
+                "Team A",
+                available_teams,
+                index=available_teams.index(st.session_state.team_a) if st.session_state.team_a in available_teams else 0
+            )
+
+        with m2:
+            team_b = st.selectbox(
+                "Team B",
+                available_teams,
+                index=1 if len(available_teams) > 1 else 0
+            )
+
+        with m3:
             momentum = st.slider("Momentum Swing", -15, 15, st.session_state.momentum)
-        with mc4:
-            is_home_a = st.checkbox("Team A is Home", value=st.session_state.is_home_a)
 
-        submitted = st.form_submit_button("Update Matchup", use_container_width=True)
+        with m4:
+            venue = st.radio("Venue", ["Neutral", "Team A Home", "Team B Home"], horizontal=False)
+
+        st.form_submit_button("Update Matchup", use_container_width=True)
 
     st.session_state.team_a = team_a
     st.session_state.team_b = team_b
     st.session_state.momentum = momentum
-    st.session_state.is_home_a = is_home_a
+    st.session_state.venue = venue
 
     if team_a == team_b:
         st.warning("Choose two different teams.")
     else:
-        a_elo = elo[team_a]
-        b_elo = elo[team_b]
-        applied_home_edge = home_edge if is_home_a else 0
+        venue_adjustment = 0
+        if venue == "Team A Home":
+            venue_adjustment = home_edge
+        elif venue == "Team B Home":
+            venue_adjustment = -home_edge
 
-        prob = live_win_prob(a_elo, b_elo, momentum=momentum, home_edge=applied_home_edge)
+        prob = live_win_prob(elo[team_a], elo[team_b], momentum=momentum, venue_adjustment=venue_adjustment)
         market = stable_market_prob(team_a, team_b)
         edge = prob - market
-
         h2h = head_to_head_summary(games, team_a, team_b)
 
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric(f"{team_a} Elo", f"{a_elo:.0f}")
-        k2.metric(f"{team_b} Elo", f"{b_elo:.0f}")
+        k1.metric(f"{team_a} Elo", f"{elo[team_a]:.0f}")
+        k2.metric(f"{team_b} Elo", f"{elo[team_b]:.0f}")
         k3.metric(f"{team_a} Win Prob", f"{prob:.2%}")
         k4.metric("Model Edge", f"{edge:.2%}")
 
         left, right = st.columns([1, 1])
 
         with left:
-            st.plotly_chart(win_prob_gauge(prob, team_a), use_container_width=True)
+            st.plotly_chart(win_prob_gauge(prob, team_a), use_container_width=True, config={"displayModeBar": False})
 
         with right:
             compare_df = pd.DataFrame({
-                "Source": ["Model", "Market"],
-                "Probability": [prob, market]
+                "Source": ["Model", "Market", f"{team_b} Implied"],
+                "Probability": [prob, market, 1 - prob]
             })
 
             fig = px.bar(
                 compare_df,
                 x="Source",
                 y="Probability",
-                title=f"{team_a} Probability: Model vs Market",
-                text_auto=".1%"
+                text_auto=".1%",
+                title=f"{team_a} Pricing Panel"
             )
-            fig.update_layout(height=320, yaxis_tickformat=".0%")
-            st.plotly_chart(fig, use_container_width=True)
+            fig.update_layout(
+                height=300,
+                yaxis_tickformat=".0%",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-        info1, info2, info3 = st.columns(3)
-        info1.info(f"Head-to-head games found: **{h2h['games']}**")
-        info2.info(f"{team_a} wins: **{h2h['a_wins']}**")
-        info3.info(f"{team_b} wins: **{h2h['b_wins']}**")
+        i1, i2, i3 = st.columns(3)
+        i1.info(f"Head-to-head games: **{h2h['games']}**")
+        i2.info(f"{team_a} wins: **{h2h['a_wins']}**")
+        i3.info(f"{team_b} wins: **{h2h['b_wins']}**")
 
-        verdict = "No edge"
-        if edge > 0.05:
-            verdict = f"Strong model edge on {team_a}"
-        elif edge > 0.02:
-            verdict = f"Moderate model edge on {team_a}"
-        elif edge < -0.05:
-            verdict = f"Market may be overpriced on {team_a}"
-        elif edge < -0.02:
-            verdict = f"Slight fade signal on {team_a}"
-
-        st.success(verdict)
+        if edge >= 0.07:
+            st.error(f"🚨 Major discrepancy: model strongly favors {team_a}")
+        elif edge >= 0.03:
+            st.warning(f"⚠️ Moderate edge: model favors {team_a}")
+        elif edge <= -0.07:
+            st.error(f"🚨 Model is far lower than market on {team_a}")
+        elif edge <= -0.03:
+            st.warning(f"⚠️ Slight fade signal on {team_a}")
+        else:
+            st.success("No major pricing discrepancy detected")
 
 # =========================================================
-# TAB 4 — TEAM FORM
+# TAB 4 — FORM TRACKER
 # =========================================================
 with tab4:
-    st.subheader("📈 Team Form Tracker")
+    st.subheader("📈 Form Tracker")
 
-    tf1, tf2 = st.columns([1, 1])
-
-    with tf1:
-        selected_team = st.selectbox("Select team", teams, key="form_team")
-
-    form_df = team_form_from_history(history_df, selected_team, last_n=last_n_form)
+    team_for_form = st.selectbox("Choose team", available_teams, key="form_select")
+    form_df = team_form_from_history(history_df, team_for_form, last_n=form_window)
 
     if form_df.empty:
-        st.warning("No form data available for that team.")
+        st.warning("No form data available.")
     else:
-        col_left, col_right = st.columns([1.1, 1])
+        left, right = st.columns([1.05, 1])
 
-        with col_left:
-            display_df = form_df.copy()
-            display_df["GAME_DATE"] = display_df["GAME_DATE"].dt.strftime("%Y-%m-%d")
+        with left:
+            form_view = form_df.copy()
+            form_view["GAME_DATE"] = form_view["GAME_DATE"].dt.strftime("%Y-%m-%d")
             st.dataframe(
-                display_df[["GAME_DATE", "OPP", "RESULT", "PRE_ELO", "POST_ELO"]],
+                form_view[["GAME_DATE", "OPP", "RESULT", "PRE_ELO", "POST_ELO", "ELO_DELTA"]],
                 use_container_width=True,
-                height=500
+                height=520
             )
 
-        with col_right:
+        with right:
             fig = px.line(
                 form_df,
                 x="GAME_DATE",
                 y="POST_ELO",
                 markers=True,
-                title=f"{selected_team} Elo Trend (Last {last_n_form})"
+                title=f"{team_for_form} Elo Trend"
             )
-            fig.update_layout(height=500)
-            st.plotly_chart(fig, use_container_width=True)
+            fig.update_layout(
+                height=520,
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)"
+            )
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+# =========================================================
+# TAB 5 — WATCHLIST
+# =========================================================
+with tab5:
+    st.subheader("🎯 Watchlist")
+
+    watch_df = trend_df.copy()
+
+    if conference_filter != "All":
+        watch_df = watch_df[watch_df["Conference"] == conference_filter].reset_index(drop=True)
+
+    risers = watch_df.sort_values("Last Window Elo Change", ascending=False).head(8).reset_index(drop=True)
+    fallers = watch_df.sort_values("Last Window Elo Change", ascending=True).head(8).reset_index(drop=True)
+    strongest = watch_df.sort_values("Elo", ascending=False).head(8).reset_index(drop=True)
+
+    w1, w2, w3 = st.columns(3)
+
+    with w1:
+        st.markdown("**Hottest Teams**")
+        st.dataframe(risers, use_container_width=True, height=320)
+
+    with w2:
+        st.markdown("**Coldest Teams**")
+        st.dataframe(fallers, use_container_width=True, height=320)
+
+    with w3:
+        st.markdown("**Strongest Teams**")
+        st.dataframe(strongest, use_container_width=True, height=320)
 
 # =========================================================
 # FOOTER
 # =========================================================
 st.markdown("---")
 st.caption(
-    "Notes: Elo is built from season game results, title odds are Monte Carlo estimates, "
-    "and the market line is a stable placeholder until you connect real odds."
+    "This dashboard uses a season-based Elo model, Monte Carlo title simulation, "
+    "and a stable placeholder market line. Replace the market model with real sportsbook odds for real betting analysis."
 )
