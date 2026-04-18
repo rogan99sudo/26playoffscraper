@@ -84,6 +84,8 @@ def market_prob(team_a, team_b):
 # -----------------------------
 # PLAYOFF SIMULATION
 # -----------------------------
+print("Bracket size:", len(bracket))
+print("Bracket:", bracket)
 def simulate_playoffs(teams, elo, sims=300):
     results = {t: 0 for t in teams}
 
